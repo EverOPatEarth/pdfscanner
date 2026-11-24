@@ -195,3 +195,17 @@ Roadmap (tags / milestones):
   (`${applicationId}.fileprovider`) with temporary read grants.
 - New PDF exports use `android.graphics.pdf.PdfDocument`; pages are downsampled to 2000 px on the long edge (`PdfOptions.maxEdgePx`). The compression tool rasterizes existing PDF pages and JPEG-recompresses them; it is intended for scanned PDFs and does not preserve selectable text/vector content.
 - Dependency versions in `gradle/libs.versions.toml` are pinned; bump them when you start.
+
+
+## v1.4.0 — JPEG-preserving PDF generation
+
+- PDF generation now embeds the JPEG pages returned by ML Kit Document Scanner directly with PDFBox.
+- Removed the fixed 2,000 px decode/downscale step from the PDF generation path.
+- The original JPEG pixel dimensions and compressed JPEG image data are retained when embedded.
+- Pages are fitted onto A4-sized PDF pages; the PDF page size does not determine or reduce the embedded image pixel dimensions.
+- This change avoids an additional Bitmap decode, resize and re-encode cycle. It does not enhance a blurry source scan or guarantee a smaller PDF than CamScanner.
+- The existing PDFBox rewrite compressor remains a structural rewrite and is not yet content-aware image recompression.
+
+### Build and test
+
+Run the existing GitHub Actions workflow (`Build APK`) on the `main` branch. Test the resulting APK with the same source documents used for the previous version. Compare source JPEG dimensions, output PDF size, rendered text clarity, and page count.

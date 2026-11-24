@@ -1,79 +1,97 @@
 package com.example.pdfscan.data
 
 import android.content.ContentResolver
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.RectF
-import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import com.example.pdfscan.domain.PdfEngine
 import com.example.pdfscan.domain.PdfOptions
+import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.pdmodel.PDPage
+import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
+import com.tom_roush.pdfbox.pdmodel.common.PDRectangle
+import com.tom_roush.pdfbox.pdmodel.graphics.image.JPEGFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
-import kotlin.math.max
+import java.io.IOException
 import kotlin.math.min
 
-/** Zero-dependency engine using android.graphics.pdf.PdfDocument. */
+/**
+ * Creates PDFs from the JPEG pages returned by ML Kit Document Scanner.
+ * JPEGs are embedded directly through PDFBox instead of decoding them into a Bitmap,
+ * resizing them to 2000 px and drawing a newly encoded page image. This avoids that
+ * unnecessary decode/downscale/re-encode path and preserves the source JPEG pixel data.
+ */
 class AndroidPdfEngine(private val resolver: ContentResolver) : PdfEngine {
 
     override suspend fun create(pages: List<Uri>, output: File, options: PdfOptions) =
         withContext(Dispatchers.IO) {
             require(pages.isNotEmpty()) { "No pages to export" }
-            val pdf = PdfDocument()
-            val paint = Paint(Paint.FILTER_BITMAP_FLAG)
-            try {
-                pages.forEachIndexed { index, uri ->
-                    currentCoroutineContext().ensureActive()
-                    val bitmap = decode(uri, options.maxEdgePx)
-                    try {
-                        val landscape = bitmap.width > bitmap.height
-                        val pw = if (landscape) A4_LONG else A4_SHORT
-                        val ph = if (landscape) A4_SHORT else A4_LONG
-                        val page = pdf.startPage(PdfDocument.PageInfo.Builder(pw, ph, index + 1).create())
-                        val scale = min(pw / bitmap.width.toFloat(), ph / bitmap.height.toFloat())
-                        val w = bitmap.width * scale
-                        val h = bitmap.height * scale
-                        val left = (pw - w) / 2f
-                        val top = (ph - h) / 2f
-                        page.canvas.drawColor(Color.WHITE)
-                        page.canvas.drawBitmap(bitmap, null, RectF(left, top, left + w, top + h), paint)
-                        pdf.finishPage(page)
-                    } finally {
-                        bitmap.recycle()
-                    }
+            output.parentFile?.let { parent ->
+                if (!parent.exists() && !parent.mkdirs()) {
+                    throw IOException("Could not create the PDF output folder.")
                 }
-                output.outputStream().use { pdf.writeTo(it) }
-            } finally {
-                pdf.close()
+            }
+            val temp = File(output.parentFile, output.name + ".creating")
+            if (temp.exists() && !temp.delete()) {
+                throw IOException("Could not prepare a temporary PDF file.")
+            }
+
+            try {
+                PDDocument().use { document ->
+                    pages.forEachIndexed { index, uri ->
+                        currentCoroutineContext().ensureActive()
+                        val input = resolver.openInputStream(uri)
+                            ?: throw IOException("Cannot open scanned image: $uri")
+                        val image = input.use { JPEGFactory.createFromStream(document, it) }
+
+                        val imageWidth = image.width.toFloat()
+                        val imageHeight = image.height.toFloat()
+                        require(imageWidth > 0f && imageHeight > 0f) {
+                            "Invalid scanned image dimensions on page ${index + 1}."
+                        }
+
+                        val pageSize = if (options.useA4Page) {
+                            if (imageWidth > imageHeight) PDRectangle(842f, 595f)
+                            else PDRectangle.A4
+                        } else {
+                            PDRectangle(imageWidth, imageHeight)
+                        }
+                        val page = PDPage(pageSize)
+                        document.addPage(page)
+
+                        val scale = min(
+                            pageSize.width / imageWidth,
+                            pageSize.height / imageHeight
+                        )
+                        val drawWidth = imageWidth * scale
+                        val drawHeight = imageHeight * scale
+                        val x = (pageSize.width - drawWidth) / 2f
+                        val y = (pageSize.height - drawHeight) / 2f
+
+                        PDPageContentStream(document, page).use { stream ->
+                            stream.drawImage(image, x, y, drawWidth, drawHeight)
+                        }
+                    }
+                    document.save(temp)
+                }
+
+                if (!temp.isFile || temp.length() <= 0L) {
+                    throw IOException("PDF creation produced an empty file.")
+                }
+                if (output.exists() && !output.delete()) {
+                    throw IOException("Could not replace the previous PDF file.")
+                }
+                if (!temp.renameTo(output)) {
+                    temp.inputStream().use { source ->
+                        output.outputStream().use { destination -> source.copyTo(destination) }
+                    }
+                    temp.delete()
+                }
+            } catch (error: Exception) {
+                temp.delete()
+                throw error
             }
         }
-
-    private fun decode(uri: Uri, maxEdge: Int): Bitmap {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-        require(bounds.outWidth > 0) { "Cannot read image: $uri" }
-
-        var sample = 1
-        while (max(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxEdge) sample *= 2
-
-        val raw = resolver.openInputStream(uri)?.use {
-            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
-        } ?: error("Cannot decode image: $uri")
-
-        val longest = max(raw.width, raw.height)
-        if (longest <= maxEdge) return raw
-        val f = maxEdge / longest.toFloat()
-        return Bitmap.createScaledBitmap(raw, (raw.width * f).toInt(), (raw.height * f).toInt(), true)
-            .also { if (it !== raw) raw.recycle() }
-    }
-
-    private companion object {
-        const val A4_SHORT = 595   // PostScript points
-        const val A4_LONG = 842
-    }
 }

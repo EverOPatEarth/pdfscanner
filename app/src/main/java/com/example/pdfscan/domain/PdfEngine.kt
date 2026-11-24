@@ -3,8 +3,10 @@ package com.example.pdfscan.domain
 import android.net.Uri
 import java.io.File
 
+/** Options for creating a PDF from scanner-produced JPEG pages. */
 data class PdfOptions(
-    val maxEdgePx: Int = 2000,   // ~150-175 dpi on A4; lower = smaller file
+    /** A4 page size is used while the source JPEG pixel dimensions are preserved. */
+    val useA4Page: Boolean = true,
 )
 
 /** Abstraction for creating PDF files from scanned page URIs. */
