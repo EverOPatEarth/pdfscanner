@@ -24,7 +24,6 @@ import androidx.compose.material.icons.rounded.Compress
 import androidx.compose.material.icons.rounded.ZoomIn
 import androidx.compose.material.icons.rounded.ZoomOut
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -57,7 +56,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
-import com.example.pdfscan.features.CompressionPreset
 import com.example.pdfscan.features.PdfCompressor
 import kotlinx.coroutines.launch
 import com.example.pdfscan.domain.PdfEntry
@@ -87,7 +85,6 @@ fun PdfViewerScreen(file: File, onBack: () -> Unit, onPdfChanged: suspend () -> 
     var zoom by rememberSaveable { mutableFloatStateOf(1f) }
     var compressionDialog by remember { mutableStateOf(false) }
     var compressing by remember { mutableStateOf(false) }
-    var preset by remember { mutableStateOf(CompressionPreset.MEDIUM) }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
 
@@ -177,16 +174,8 @@ fun PdfViewerScreen(file: File, onBack: () -> Unit, onPdfChanged: suspend () -> 
             title = { Text("Compress PDF") },
             text = {
                 Column {
-                    Text("Choose a balance between file size and image quality.")
-                    CompressionPreset.values().forEach { option ->
-                        androidx.compose.foundation.layout.Row(verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = preset == option, onClick = { preset = option }, enabled = !compressing)
-                            Column {
-                                Text(option.name.lowercase().replaceFirstChar { it.uppercase() })
-                                Text("${option.maxEdge}px · JPEG quality ${option.jpegQuality}", style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                    }
+                    Text("Optimize this PDF without reducing page resolution or rasterizing its text and vector content. The original file will remain unchanged.")
+                    Text("Some PDFs are already optimized, so the output may be the same size as the original.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (compressing) CircularProgressIndicator()
                 }
             },
@@ -196,11 +185,11 @@ fun PdfViewerScreen(file: File, onBack: () -> Unit, onPdfChanged: suspend () -> 
                     scope.launch {
                         try {
                             val output = File(file.parentFile, "${file.nameWithoutExtension}_compressed.pdf")
-                            val result = PdfCompressor.compress(file, output, preset)
+                            val result = PdfCompressor.compress(context, file, output)
                             val newEntry = PdfEntry(result, result.nameWithoutExtension, result.length(), result.lastModified())
                             onPdfChanged()
                             compressionDialog = false
-                            snackbar.showSnackbar("Compressed: ${file.length()/1024} KB → ${result.length()/1024} KB")
+                            snackbar.showSnackbar(if (result.length() < file.length()) "Optimized: ${file.length()/1024} KB → ${result.length()/1024} KB" else "No safe size reduction found; original PDF quality and content were preserved.")
                             context.sharePdf(newEntry)
                         } catch (e: Exception) { snackbar.showSnackbar("Compression failed: ${e.message}") }
                         finally { compressing = false }

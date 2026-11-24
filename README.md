@@ -1,4 +1,4 @@
-# PDF Scanner (Android, Kotlin, Jetpack Compose) – v1.2.0
+# PDF Scanner (Android, Kotlin, Jetpack Compose) – v1.3.0
 
 Scan or import pages with the Google ML Kit Document Scanner, reorder/delete/rename,
 save as a PDF in app-private storage, then open or share it via the Android share sheet.
@@ -34,7 +34,7 @@ This repo includes `.github/workflows/build.yml`. GitHub builds the app for you.
 Make a downloadable release:
 
     git tag -a v1.0.0 -m "MVP"
-    git push origin v1.2.0
+    git push origin v1.3.0
 
 The workflow then attaches `app-debug.apk` to a GitHub Release (Releases page).
 
@@ -46,26 +46,29 @@ release needs your own signing key (keep it in GitHub Secrets, never in the repo
 
 
 ---------------------------------------------------------------------
-## 3. PDF compression (v1.2.0)
+## 3. PDF compression (v1.3.0)
 ---------------------------------------------------------------------
 
-- **PDF compression:** Open a saved PDF in the built-in viewer and tap the
-  compression icon. Choose High, Medium, or Low:
-  - High: smaller output, more visible quality loss may occur.
-  - Medium: balanced file size and image quality.
-  - Low: prioritizes image quality and may produce a larger file.
-- The compressor rasterizes each page and recompresses it as a JPEG image.
-  It is intended mainly for scanned/image-based PDFs. Selectable text, vector
-  graphics, forms, links, and some metadata are not preserved.
-- The compressed PDF is created as a separate file with `_compressed` appended
-  to its name. The original PDF is not overwritten. The compressed file is
-  offered through Android's share sheet.
+- **Lossless PDF rewrite:** Open a saved PDF in the built-in viewer and tap the
+  compression icon. The app uses PDFBox-Android to rewrite the PDF without
+  rasterizing pages, downscaling images, or converting pages to JPEG.
+- Text, vector content, page dimensions, and embedded image pixel dimensions are
+  retained by the rewrite. The original file is never overwritten.
+- The optimized file is saved separately with `_compressed` appended to its name
+  and offered through Android's share sheet.
+- A smaller output is not guaranteed. If the rewrite does not make the PDF smaller,
+  the app copies the original bytes unchanged instead of producing a larger file.
+- This prioritizes content preservation over aggressive size reduction. Encrypted
+  PDFs may require a password and may not be supported. Saving a digitally signed
+  PDF can invalidate its existing digital signature; test forms and unusual PDF
+  features before relying on the output.
 
 The scan-review workflow remains: scan/import pages, reorder or delete pages,
-rename the output, save as PDF, preview, and share. OCR, stain/background
-cleaning, and signature tools are not included in this version.
+rename the output, save as PDF, preview, and share. OCR, stain/background cleaning,
+and signature tools are not included.
 
 ---------------------------------------------------------------------
+
 ## 1. Requirements
 ---------------------------------------------------------------------
 - Android Studio Ladybug (2024.2.1) or newer (Koala works; newer is better)
@@ -156,8 +159,8 @@ Dependency rule: ui -> domain <- data. `scanner` is only used by `ui`.
     gh repo create pdfscan --private --source=. --remote=origin --push
     # or: git remote add origin git@github.com:<you>/pdfscan.git && git push -u origin main
 
-    git tag -a v1.2.0 -m "compression-focused release"
-    git push origin v1.2.0
+    git tag -a v1.3.0 -m "compression-focused release"
+    git push origin v1.3.0
 
 Branches: `main` (always buildable), `feature/<name>`, `fix/<name>`, `chore/<name>`; squash-merge PRs.
 Commits (Conventional Commits): `feat(scope): ...`, `fix(scope): ...`, `refactor`, `perf`, `test`,
@@ -167,7 +170,7 @@ Never commit keystores or `keystore.properties` (already in `.gitignore`).
 Roadmap (tags / milestones):
 - v0.1.0  walking skeleton: scan -> PDF -> share
 - v1.0.0  original scanner MVP
-- v1.2.0  Compression-focused release; removes OCR, cleaning, and signature tools
+- v1.3.0  Compression-focused release; removes OCR, cleaning, and signature tools
 - v1.3.0  Save-to-Files workflow and page-reordering improvements
 - v2.0.0  Room index + folders/tags, cloud backup
 

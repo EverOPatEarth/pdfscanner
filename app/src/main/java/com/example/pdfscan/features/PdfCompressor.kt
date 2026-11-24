@@ -1,47 +1,78 @@
 package com.example.pdfscan.features
 
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import java.io.ByteArrayOutputStream
-import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.RectF
-import android.graphics.pdf.PdfDocument
-import android.graphics.pdf.PdfRenderer
-import android.os.ParcelFileDescriptor
+import android.content.Context
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import com.tom_roush.pdfbox.pdmodel.PDDocument
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import kotlin.math.min
+import java.io.IOException
 
-enum class CompressionPreset(val maxEdge: Int, val jpegQuality: Int) { HIGH(1100,55), MEDIUM(1600,72), LOW(2200,86) }
-
-/** Raster recompression for scanned/image PDFs. Text/vector layers in the source PDF are rasterized. */
+/**
+ * Lossless PDF rewrite/optimization.
+ *
+ * PDFBox rewrites the PDF object structure without rasterizing pages or re-encoding
+ * embedded images. Text, vector content, page dimensions and image pixel dimensions
+ * are retained. A rewritten file is used only when it is smaller than the source;
+ * otherwise the original bytes are copied so this operation never makes the PDF larger.
+ *
+ * This does not promise a smaller file for every PDF. Already-optimized PDFs may not
+ * have any safe size reduction available without changing image quality or resolution.
+ */
 object PdfCompressor {
-    suspend fun compress(input: File, output: File, preset: CompressionPreset): File = withContext(Dispatchers.IO) {
-        val descriptor = ParcelFileDescriptor.open(input, ParcelFileDescriptor.MODE_READ_ONLY)
-        val renderer = PdfRenderer(descriptor); val pdf = PdfDocument()
-        try {
-            for (i in 0 until renderer.pageCount) {
-                renderer.openPage(i).use { sourcePage ->
-                    val scale = min(1f, preset.maxEdge.toFloat() / maxOf(sourcePage.width, sourcePage.height))
-                    val width = (sourcePage.width * scale).toInt().coerceAtLeast(1)
-                    val height = (sourcePage.height * scale).toInt().coerceAtLeast(1)
-                    val bitmap = Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888).also { it.eraseColor(Color.WHITE) }
-                    sourcePage.render(bitmap,null,null,PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
-                    val compressedBytes = ByteArrayOutputStream().use { stream ->
-                        bitmap.compress(Bitmap.CompressFormat.JPEG, preset.jpegQuality, stream)
-                        stream.toByteArray()
-                    }
-                    val compressedBitmap = BitmapFactory.decodeByteArray(compressedBytes, 0, compressedBytes.size)
-                        ?: error("Could not encode compressed page ${i + 1}")
-                    val page = pdf.startPage(PdfDocument.PageInfo.Builder(width,height,i+1).create())
-                    page.canvas.drawBitmap(compressedBitmap,null,RectF(0f,0f,width.toFloat(),height.toFloat()), Paint(Paint.FILTER_BITMAP_FLAG))
-                    pdf.finishPage(page); compressedBitmap.recycle(); bitmap.recycle()
+
+    suspend fun compress(context: Context, input: File, output: File): File =
+        withContext(Dispatchers.IO) {
+            require(input.isFile) { "The source PDF does not exist." }
+            require(input.length() > 0L) { "The source PDF is empty." }
+            require(input.canonicalFile != output.canonicalFile) {
+                "Choose a different output file so the original stays unchanged."
+            }
+
+            output.parentFile?.let { parent ->
+                if (!parent.exists() && !parent.mkdirs()) {
+                    throw IOException("Could not create the output folder.")
                 }
             }
-            output.outputStream().use { pdf.writeTo(it) }
-            output
-        } finally { pdf.close(); renderer.close(); descriptor.close() }
-    }
+
+            PDFBoxResourceLoader.init(context.applicationContext)
+
+            val temp = File(output.parentFile, output.name + ".optimizing")
+            if (temp.exists() && !temp.delete()) {
+                throw IOException("Could not prepare a temporary output file.")
+            }
+
+            try {
+                PDDocument.load(input).use { document ->
+                    document.save(temp)
+                }
+
+                if (temp.length() in 1 until input.length()) {
+                    if (output.exists() && !output.delete()) {
+                        throw IOException("Could not replace the previous compressed file.")
+                    }
+                    if (!temp.renameTo(output)) {
+                        temp.inputStream().use { source ->
+                            output.outputStream().use { destination -> source.copyTo(destination) }
+                        }
+                        temp.delete()
+                    }
+                } else {
+                    // No safe size reduction was achieved. Keep the original PDF bytes.
+                    if (output.exists() && !output.delete()) {
+                        throw IOException("Could not replace the previous compressed file.")
+                    }
+                    input.inputStream().use { source ->
+                        output.outputStream().use { destination -> source.copyTo(destination) }
+                    }
+                    temp.delete()
+                }
+
+                output
+            } catch (error: Exception) {
+                temp.delete()
+                output.delete()
+                throw error
+            }
+        }
 }

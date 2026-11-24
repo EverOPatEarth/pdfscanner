@@ -12,8 +12,8 @@ android {
         applicationId = "com.example.pdfscan"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = 4
+        versionName = "1.3.0"
     }
 
     buildTypes {
@@ -48,6 +48,7 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.mlkit.document.scanner)
     implementation(libs.kotlinx.coroutines.play.services)
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 
     testImplementation(libs.junit)
 }
