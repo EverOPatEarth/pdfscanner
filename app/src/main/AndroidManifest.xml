@@ -1,4 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- No permissions: scanner UI runs in Play services; PDFs live in app-private storage. -->
     <application
         android:name=".ScanApp"

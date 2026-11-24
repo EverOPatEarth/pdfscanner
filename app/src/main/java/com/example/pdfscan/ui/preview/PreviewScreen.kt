@@ -1,6 +1,7 @@
 package com.example.pdfscan.ui.preview
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -8,10 +9,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
@@ -46,15 +51,27 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
+import com.example.pdfscan.features.DocumentImageProcessor
+import com.example.pdfscan.features.OcrLanguages
+import com.example.pdfscan.features.OcrService
+import com.example.pdfscan.features.PageImageActions
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.pdfscan.domain.PdfEntry
@@ -72,6 +89,11 @@ fun PreviewScreen(vm: ScanSessionViewModel, onExit: () -> Unit, onOpen: (PdfEntr
     val snackbar = remember { SnackbarHostState() }
     val pager = rememberPagerState { state.pages.size }
     var confirmDiscard by remember { mutableStateOf(false) }
+    var ocrText by remember { mutableStateOf<String?>(null) }
+    var ocrBusy by remember { mutableStateOf(false) }
+    var signatureDialog by remember { mutableStateOf(false) }
+    val signatureLines = remember { mutableStateListOf<MutableList<Offset>>() }
+    var actionBusy by remember { mutableStateOf(false) }
     val done = state.export as? ExportState.Done
 
     val addPages = rememberDocumentScanner(
@@ -120,6 +142,7 @@ fun PreviewScreen(vm: ScanSessionViewModel, onExit: () -> Unit, onOpen: (PdfEntr
             ActionBar(
                 state = state,
                 page = pager.currentPage,
+                processing = actionBusy || ocrBusy,
                 onRename = vm::rename,
                 onAdd = addPages,
                 onMove = { d ->
@@ -129,6 +152,37 @@ fun PreviewScreen(vm: ScanSessionViewModel, onExit: () -> Unit, onOpen: (PdfEntr
                 },
                 onDelete = { vm.delete(pager.currentPage) },
                 onSave = vm::export,
+                onOcr = {
+                    val uri = state.pages.getOrNull(pager.currentPage)?.uri ?: return@ActionBar
+                    ocrBusy = true
+                    scope.launch {
+                        try {
+                            val bitmap = withContext(Dispatchers.IO) { PageImageActions.load(context, uri) }
+                            try { ocrText = OcrService(context).recognize(bitmap, OcrLanguages.BOTH) }
+                            finally { bitmap.recycle() }
+                        } catch (e: Exception) { snackbar.showSnackbar("OCR failed: ${e.message ?: "Unknown error"}") }
+                        finally { ocrBusy = false }
+                    }
+                },
+                onClean = {
+                    val uri = state.pages.getOrNull(pager.currentPage)?.uri ?: return@ActionBar
+                    actionBusy = true
+                    scope.launch {
+                        try {
+                            val result = withContext(Dispatchers.IO) {
+                                val original = PageImageActions.load(context, uri)
+                                val cleaned = DocumentImageProcessor.clean(original, true, true)
+                                original.recycle()
+                                val saved = PageImageActions.save(context, cleaned, "cleaned_page")
+                                cleaned.recycle(); saved
+                            }
+                            vm.replacePage(pager.currentPage, result)
+                            snackbar.showSnackbar("Page cleaned. Original scan remains unchanged.")
+                        } catch (e: Exception) { snackbar.showSnackbar("Cleaning failed: ${e.message}") }
+                        finally { actionBusy = false }
+                    }
+                },
+                onSign = { signatureLines.clear(); signatureDialog = true },
                 onOpen = { done?.let { onOpen(it.entry) } },
                 onShare = { done?.let { context.sharePdf(it.entry) } },
                 onDone = onExit,
@@ -151,6 +205,58 @@ fun PreviewScreen(vm: ScanSessionViewModel, onExit: () -> Unit, onOpen: (PdfEntr
         }
     }
 
+    if (ocrText != null) {
+        AlertDialog(
+            onDismissRequest = { ocrText = null },
+            title = { Text("Recognized text (English + Myanmar)") },
+            text = { Text(ocrText?.ifBlank { "No text recognized." } ?: "No text recognized.", modifier = Modifier.height(300.dp).verticalScroll(rememberScrollState())) },
+            confirmButton = { TextButton(onClick = { ocrText?.let { android.content.ClipData.newPlainText("OCR text", it).also { clip -> (context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(clip) } }; ocrText = null }) { Text("Copy") } },
+            dismissButton = { TextButton(onClick = { ocrText = null }) { Text("Close") } },
+        )
+    }
+    if (signatureDialog) {
+        AlertDialog(
+            onDismissRequest = { signatureDialog = false },
+            title = { Text("Draw your signature") },
+            text = {
+                Column {
+                    Text("Draw below. The signature will be placed near the bottom-right of this page.", style = MaterialTheme.typography.bodySmall)
+                    Canvas(Modifier.fillMaxWidth().height(160.dp).padding(top = 8.dp).background(Color.White).pointerInput(Unit) {
+                        detectDragGestures(
+                            onDragStart = { p -> signatureLines.add(mutableStateListOf(p)) },
+                            onDrag = { change, _ -> change.consume(); signatureLines.lastOrNull()?.add(change.position) },
+                        )
+                    }) {
+                        signatureLines.forEach { line ->
+                            if (line.size > 1) {
+                                val path = Path().apply { moveTo(line.first().x, line.first().y); line.drop(1).forEach { lineTo(it.x, it.y) } }
+                                drawPath(path, Color.Black, style = Stroke(width = 3.dp.toPx()))
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(enabled = signatureLines.any { it.size > 1 } && !actionBusy, onClick = {
+                signatureDialog = false; actionBusy = true
+                val uri = state.pages.getOrNull(pager.currentPage)?.uri
+                scope.launch {
+                    try {
+                        if (uri != null) withContext(Dispatchers.IO) {
+                            val original = PageImageActions.load(context, uri)
+                            val signature = PageImageActions.signatureBitmap(signatureLines.map { it.toList() }, 640, 320)
+                            val signed = PageImageActions.addSignature(original, signature)
+                            val saved = PageImageActions.save(context, signed, "signed_page")
+                            original.recycle(); signature.recycle(); signed.recycle(); saved
+                        }.let { vm.replacePage(pager.currentPage, it) }
+                        snackbar.showSnackbar("Signature added to page.")
+                    } catch (e: Exception) { snackbar.showSnackbar("Could not add signature: ${e.message}") }
+                    finally { actionBusy = false; signatureLines.clear() }
+                }
+            }) { Text("Apply signature") } },
+            dismissButton = { TextButton(onClick = { signatureDialog = false; signatureLines.clear() }) { Text("Cancel") } },
+        )
+    }
+
     if (confirmDiscard) {
         AlertDialog(
             onDismissRequest = { confirmDiscard = false },
@@ -164,9 +270,9 @@ fun PreviewScreen(vm: ScanSessionViewModel, onExit: () -> Unit, onOpen: (PdfEntr
 
 @Composable
 private fun ActionBar(
-    state: PreviewUiState, page: Int,
+    state: PreviewUiState, page: Int, processing: Boolean,
     onRename: (String) -> Unit, onAdd: () -> Unit, onMove: (Int) -> Unit, onDelete: () -> Unit,
-    onSave: () -> Unit, onOpen: () -> Unit, onShare: () -> Unit, onDone: () -> Unit,
+    onSave: () -> Unit, onOcr: () -> Unit, onClean: () -> Unit, onSign: () -> Unit, onOpen: () -> Unit, onShare: () -> Unit, onDone: () -> Unit,
 ) {
     val saved = state.export is ExportState.Done
     val working = state.export is ExportState.Working
@@ -200,7 +306,11 @@ private fun ActionBar(
                         Icon(Icons.Rounded.Delete, "Delete page")
                     }
                     Spacer(Modifier.weight(1f))
-                    Button(onClick = onSave, enabled = !working && state.fileName.isNotBlank()) {
+                    TextButton(onClick = onOcr, enabled = !working && !processing) { Text(if (processing) "Working…" else "OCR") }
+                    TextButton(onClick = onClean, enabled = !working && !processing) { Text("Clean") }
+                    TextButton(onClick = onSign, enabled = !working && !processing) { Text("Sign") }
+                    Spacer(Modifier.weight(1f))
+                    Button(onClick = onSave, enabled = !working && !processing && state.fileName.isNotBlank()) {
                         if (working) CircularProgressIndicator(
                             Modifier.size(18.dp), strokeWidth = 2.dp, color = LocalContentColor.current,
                         )

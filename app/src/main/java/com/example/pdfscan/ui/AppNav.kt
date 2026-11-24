@@ -72,6 +72,7 @@ fun AppNav(container: AppContainer) {
                 PdfViewerScreen(
                     file = File(File(context.filesDir, "pdfs"), name),
                     onBack = { nav.popBackStack() },
+                    onPdfChanged = { container.pdfRepository.refresh() },
                 )
             }
         }

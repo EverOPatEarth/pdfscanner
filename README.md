@@ -1,4 +1,4 @@
-# PDF Scanner (Android, Kotlin, Jetpack Compose) – v1.0.0 MVP
+# PDF Scanner (Android, Kotlin, Jetpack Compose) – v1.1.0
 
 Scan or import pages with the Google ML Kit Document Scanner, reorder/delete/rename,
 save as a PDF in app-private storage, then open or share it via the Android share sheet.
@@ -43,6 +43,36 @@ Paste it to Claude and it can fix the code.
 
 Note: this is a debug-signed APK, fine for personal use and testing. A Play Store
 release needs your own signing key (keep it in GitHub Secrets, never in the repo).
+
+
+---------------------------------------------------------------------
+## 3. Added document tools (v1.1.0)
+---------------------------------------------------------------------
+
+- **OCR (English + Myanmar):** English uses the bundled ML Kit Latin recognizer.
+  Myanmar uses Tesseract4Android and downloads `mya.traineddata` from the
+  Tesseract `tessdata_best` repository the first time Myanmar OCR is used.
+  Internet access is needed for that first model download; after it is stored
+  in app-private storage, Myanmar OCR can run offline. OCR output can be copied.
+- **PDF compression:** Open a PDF and tap the compression icon. High, Medium,
+  and Low presets rasterize pages and recompress them as JPEG images. This is
+  intended for scanned/image PDFs. Existing selectable text, vector graphics,
+  forms, links, and metadata are not preserved by raster compression.
+- **Visual e-signature:** In the scan review screen, tap Sign, draw with a finger,
+  and apply it to the current page before exporting. This is a visual signature
+  image, not a certificate-backed cryptographic digital signature.
+- **Document cleaning:** In scan review, tap Clean to normalize paper tone,
+  reduce uneven shadows, whiten background stains, and remove isolated specks.
+  The cleaned copy replaces the page in the current editing session; the source
+  scan file is not overwritten. Always inspect handwriting and faint marks after
+  cleaning because image processing can remove low-contrast content.
+
+### Build dependencies
+
+Tesseract4Android is resolved from JitPack. The first Gradle sync therefore
+requires internet access. Myanmar OCR additionally downloads its language data
+on first use. Review the Tesseract4Android and Tesseract language-data licenses
+before distributing a production build.
 
 ---------------------------------------------------------------------
 ## 1. Requirements
@@ -135,7 +165,7 @@ Dependency rule: ui -> domain <- data. `scanner` is only used by `ui`.
     gh repo create pdfscan --private --source=. --remote=origin --push
     # or: git remote add origin git@github.com:<you>/pdfscan.git && git push -u origin main
 
-    git tag -a v1.0.0 -m "MVP: scan, preview, export, share"
+    git tag -a v1.1.0 -m "OCR, compression, visual signature, document cleaning"
     git push origin v1.0.0
 
 Branches: `main` (always buildable), `feature/<name>`, `fix/<name>`, `chore/<name>`; squash-merge PRs.
@@ -145,10 +175,12 @@ Never commit keystores or `keystore.properties` (already in `.gitignore`).
 
 Roadmap (tags / milestones):
 - v0.1.0  walking skeleton: scan -> PDF -> share
-- v1.0.0  MVP (this project)
-- v1.1.0  Save to Files (ACTION_CREATE_DOCUMENT), drag-reorder, undo delete,
-          photo-picker/CameraX fallback, PDF size options
-- v2.0.0  Room index + folders/tags, OCR (searchable PDF), compression engine, cloud backup
+- v1.0.0  original scanner MVP
+- v1.1.0  English + Myanmar OCR extraction, scanned-page visual signature,
+          stain/shadow cleaning, and raster PDF compression
+- v1.2.0  searchable PDF text layer, save-to-Files workflow, page reordering
+          improvements, reusable signatures, and non-destructive PDF editing
+- v2.0.0  Room index + folders/tags, cloud backup
 
 ---------------------------------------------------------------------
 ## 7. Extension points (where future features plug in)
@@ -156,12 +188,14 @@ Roadmap (tags / milestones):
 | Feature                      | Seam                                   | Change                                           |
 |------------------------------|----------------------------------------|--------------------------------------------------|
 | PDF viewer engine (PDFium etc)| `ui/viewer/PdfDocumentHandle`          | Swap the renderer; viewer UI unchanged           |
-| Better PDF / compression/OCR | `domain/PdfEngine`                     | New implementation; swap in `AppContainer`       |
+| PDF creation / compression | `features/PdfCompressor`, `domain/PdfEngine` | Extend processing or replace raster compressor |
 | CameraX / photo picker       | `ScanSessionViewModel.addPages(Uris)`  | New launcher that calls `addPages`               |
 | Folders, tags, search        | `domain/PdfRepository`, `PdfEntry`     | Back with Room (files stay on disk)              |
 | Cloud backup                 | `PdfRepository` + WorkManager          | Add a `BackupTarget` interface                   |
 | New export steps             | `ExportState` sealed interface         | Add `Processing(step, progress)`; fix `when`s    |
-| Filters / deskew / OCR prep  | (v1.1) `PageProcessor` before engine   | Fold processors over pages in `export()`         |
+| OCR / text extraction       | `features/OcrService`                  | Add recognition languages and searchable text layer |
+| Page cleaning               | `features/DocumentImageProcessor`      | Add preview controls and additional cleanup filters |
+| Visual signature            | `features/PageImageActions`            | Add saved signatures and PDF-page placement       |
 | Hilt                         | Constructor-injected ViewModels        | Replace `AppContainer` with Hilt modules         |
 
 ---------------------------------------------------------------------
@@ -170,6 +204,5 @@ Roadmap (tags / milestones):
 - minSdk 26, targetSdk/compileSdk 35. No CAMERA or storage permissions are needed.
 - PDFs are stored in `filesDir/pdfs` (private; removed on uninstall) and shared via FileProvider
   (`${applicationId}.fileprovider`) with temporary read grants.
-- `android.graphics.pdf.PdfDocument` is lossless, so PDFs can be larger than JPEG-embedded ones;
-  pages are downsampled to 2000 px on the long edge (`PdfOptions.maxEdgePx`). Lower it for smaller files.
+- New PDF exports use `android.graphics.pdf.PdfDocument`; pages are downsampled to 2000 px on the long edge (`PdfOptions.maxEdgePx`). The compression tool rasterizes existing PDF pages and JPEG-recompresses them; it is intended for scanned PDFs and does not preserve selectable text/vector content.
 - Dependency versions in `gradle/libs.versions.toml` are pinned; bump them when you start.

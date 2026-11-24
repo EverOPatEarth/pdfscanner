@@ -12,8 +12,8 @@ android {
         applicationId = "com.example.pdfscan"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
     }
 
     buildTypes {
@@ -47,6 +47,9 @@ dependencies {
 
     implementation(libs.coil.compose)
     implementation(libs.mlkit.document.scanner)
+    implementation(libs.mlkit.text.recognition)
+    implementation(libs.tesseract4android)
+    implementation(libs.kotlinx.coroutines.play.services)
 
     testImplementation(libs.junit)
 }

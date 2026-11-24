@@ -56,6 +56,10 @@ class ScanSessionViewModel(private val repo: PdfRepository) : ViewModel() {
         s.copy(pages = s.pages.filterIndexed { i, _ -> i != index })
     }
 
+    fun replacePage(index: Int, uri: Uri) = _state.update { s ->
+        if (index !in s.pages.indices) s else s.copy(pages = s.pages.toMutableList().also { it[index] = it[index].copy(uri = uri) })
+    }
+
     fun rename(name: String) = _state.update { it.copy(fileName = name) }
     fun dismissError() = _state.update { it.copy(export = ExportState.Idle) }
     fun reset() { _state.value = PreviewUiState() }
