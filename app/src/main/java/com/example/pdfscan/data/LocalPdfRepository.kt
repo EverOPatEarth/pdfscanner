@@ -1,8 +1,10 @@
 package com.example.pdfscan.data
 
 import android.net.Uri
+import com.example.pdfscan.domain.Compression
 import com.example.pdfscan.domain.PdfEngine
 import com.example.pdfscan.domain.PdfEntry
+import com.example.pdfscan.domain.PdfOptions
 import com.example.pdfscan.domain.PdfRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -14,6 +16,7 @@ import java.io.File
 class LocalPdfRepository(
     private val dir: File,
     private val engine: PdfEngine,
+    private val rasterizer: PdfRasterizer,
 ) : PdfRepository {
 
     private val state = MutableStateFlow<List<PdfEntry>?>(null)
@@ -21,18 +24,28 @@ class LocalPdfRepository(
 
     override suspend fun refresh() = withContext(Dispatchers.IO) { state.value = list() }
 
-    override suspend fun export(pages: List<Uri>, baseName: String): PdfEntry =
+    override suspend fun export(pages: List<Uri>, baseName: String, options: PdfOptions): PdfEntry =
         withContext(Dispatchers.IO) {
             dir.mkdirs()
             val file = uniqueFile(baseName)
             try {
-                engine.create(pages, file)
+                engine.create(pages, file, options)
             } catch (t: Throwable) {
                 file.delete()
                 throw t
             }
             state.value = list()
             file.toEntry()
+        }
+
+    override suspend fun compress(entry: PdfEntry, level: Compression): PdfEntry =
+        withContext(Dispatchers.IO) {
+            val raster = rasterizer.rasterize(entry.file, level)
+            try {
+                export(raster.uris, "${entry.name} (compressed)", PdfOptions(compression = level))
+            } finally {
+                raster.dir.deleteRecursively()
+            }
         }
 
     override suspend fun delete(entry: PdfEntry) = withContext(Dispatchers.IO) {

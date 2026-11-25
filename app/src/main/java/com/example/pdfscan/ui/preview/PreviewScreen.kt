@@ -1,36 +1,49 @@
 package com.example.pdfscan.ui.preview
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.AddPhotoAlternate
+import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Compress
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Draw
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -48,19 +61,24 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.example.pdfscan.domain.Compression
 import com.example.pdfscan.domain.PdfEntry
 import com.example.pdfscan.scanner.rememberDocumentScanner
 import com.example.pdfscan.ui.sharePdf
+import com.example.pdfscan.ui.sign.SignDialog
 import com.example.pdfscan.ui.theme.ReviewCanvas
 import kotlinx.coroutines.launch
 
@@ -68,13 +86,15 @@ import kotlinx.coroutines.launch
 @Composable
 fun PreviewScreen(vm: ScanSessionViewModel, onExit: () -> Unit, onOpen: (PdfEntry) -> Unit) {
     val state by vm.state.collectAsStateWithLifecycle()
+    val signature by vm.signature.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val pager = rememberPagerState { state.pages.size }
     var confirmDiscard by remember { mutableStateOf(false) }
-    var actionBusy by remember { mutableStateOf(false) }
+    var showSign by remember { mutableStateOf(false) }
     val done = state.export as? ExportState.Done
+    val currentPage = state.pages.getOrNull(pager.currentPage)
 
     val addPages = rememberDocumentScanner(
         onPages = vm::addPages,
@@ -122,7 +142,7 @@ fun PreviewScreen(vm: ScanSessionViewModel, onExit: () -> Unit, onOpen: (PdfEntr
             ActionBar(
                 state = state,
                 page = pager.currentPage,
-                processing = actionBusy,
+                pageSigned = currentPage?.isSigned == true,
                 onRename = vm::rename,
                 onAdd = addPages,
                 onMove = { d ->
@@ -131,6 +151,11 @@ fun PreviewScreen(vm: ScanSessionViewModel, onExit: () -> Unit, onOpen: (PdfEntr
                     scope.launch { pager.animateScrollToPage(from + d) }
                 },
                 onDelete = { vm.delete(pager.currentPage) },
+                onSign = { showSign = true },
+                onUnsign = { vm.removeSignature(pager.currentPage) },
+                onClean = vm::setCleanStains,
+                onOcr = vm::setOcr,
+                onCompression = vm::setCompression,
                 onSave = vm::export,
                 onOpen = { done?.let { onOpen(it.entry) } },
                 onShare = { done?.let { context.sharePdf(it.entry) } },
@@ -144,14 +169,42 @@ fun PreviewScreen(vm: ScanSessionViewModel, onExit: () -> Unit, onOpen: (PdfEntr
                 modifier = Modifier.fillMaxSize(),
                 key = { state.pages.getOrNull(it)?.id ?: it },
             ) { index ->
-                AsyncImage(
-                    model = state.pages.getOrNull(index)?.uri,
-                    contentDescription = "Page ${index + 1}",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize().padding(16.dp),
-                )
+                val page = state.pages.getOrNull(index)
+                val clean = state.options.cleanStains
+                // When "Remove stains" is on, show a cleaned low-res preview of this page.
+                val cleaned by produceState<ImageBitmap?>(null, page?.uri, clean) {
+                    value = null
+                    if (clean && page != null) {
+                        value = runCatching { vm.cleanedPreview(page.uri).asImageBitmap() }.getOrNull()
+                    }
+                }
+                val modifier = Modifier.fillMaxSize().padding(16.dp)
+                val bitmap = cleaned
+                if (bitmap != null) {
+                    Image(bitmap, "Page ${index + 1} (cleaned)", modifier, contentScale = ContentScale.Fit)
+                } else {
+                    AsyncImage(
+                        model = page?.uri,
+                        contentDescription = "Page ${index + 1}",
+                        contentScale = ContentScale.Fit,
+                        modifier = modifier,
+                    )
+                }
             }
         }
+    }
+
+    if (showSign && currentPage != null) {
+        SignDialog(
+            pageUri = currentPage.uri,
+            signature = signature,
+            onSaveSignature = vm::saveSignature,
+            onApply = { placement ->
+                vm.applySignature(pager.currentPage, placement)
+                showSign = false
+            },
+            onDismiss = { showSign = false },
+        )
     }
 
     if (confirmDiscard) {
@@ -166,23 +219,101 @@ fun PreviewScreen(vm: ScanSessionViewModel, onExit: () -> Unit, onOpen: (PdfEntr
 }
 
 @Composable
+private fun OptionsRow(
+    state: PreviewUiState,
+    pageSigned: Boolean,
+    enabled: Boolean,
+    onSign: () -> Unit,
+    onUnsign: () -> Unit,
+    onClean: (Boolean) -> Unit,
+    onOcr: (Boolean) -> Unit,
+    onCompression: (Compression) -> Unit,
+) {
+    var menu by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AssistChip(
+            onClick = onSign, enabled = enabled,
+            label = { Text("Sign") },
+            leadingIcon = { Icon(Icons.Rounded.Draw, null, Modifier.size(18.dp)) },
+        )
+        if (pageSigned) {
+            AssistChip(
+                onClick = onUnsign, enabled = enabled,
+                label = { Text("Remove signature") },
+                leadingIcon = { Icon(Icons.Rounded.Close, null, Modifier.size(18.dp)) },
+            )
+        }
+        FilterChip(
+            selected = state.options.cleanStains,
+            onClick = { onClean(!state.options.cleanStains) },
+            enabled = enabled,
+            label = { Text("Remove stains") },
+            leadingIcon = { Icon(Icons.Rounded.AutoFixHigh, null, Modifier.size(18.dp)) },
+        )
+        FilterChip(
+            selected = state.options.ocr,
+            onClick = { onOcr(!state.options.ocr) },
+            enabled = enabled,
+            label = { Text("OCR (searchable)") },
+            leadingIcon = { Icon(Icons.Rounded.TextFields, null, Modifier.size(18.dp)) },
+        )
+        Box {
+            AssistChip(
+                onClick = { menu = true }, enabled = enabled,
+                label = { Text("Size: ${state.options.compression.label}") },
+                leadingIcon = { Icon(Icons.Rounded.Compress, null, Modifier.size(18.dp)) },
+            )
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                Compression.entries.forEach { c ->
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(c.label, style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    c.hint, style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
+                        onClick = { onCompression(c); menu = false },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ActionBar(
-    state: PreviewUiState, page: Int, processing: Boolean,
+    state: PreviewUiState, page: Int, pageSigned: Boolean,
     onRename: (String) -> Unit, onAdd: () -> Unit, onMove: (Int) -> Unit, onDelete: () -> Unit,
+    onSign: () -> Unit, onUnsign: () -> Unit,
+    onClean: (Boolean) -> Unit, onOcr: (Boolean) -> Unit, onCompression: (Compression) -> Unit,
     onSave: () -> Unit, onOpen: () -> Unit, onShare: () -> Unit, onDone: () -> Unit,
 ) {
     val saved = state.export is ExportState.Done
     val working = state.export is ExportState.Working
+    val busy = working || state.editing
 
     Surface(color = MaterialTheme.colorScheme.surface) {
         Column(Modifier.navigationBarsPadding()) {
-            HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth()) else HorizontalDivider(color = MaterialTheme.colorScheme.outline)
             if (!saved) {
+                OptionsRow(
+                    state = state, pageSigned = pageSigned, enabled = !busy,
+                    onSign = onSign, onUnsign = onUnsign,
+                    onClean = onClean, onOcr = onOcr, onCompression = onCompression,
+                )
                 OutlinedTextField(
                     value = state.fileName, onValueChange = onRename,
-                    singleLine = true, enabled = !working,
+                    singleLine = true, enabled = !busy,
                     label = { Text("File name") }, suffix = { Text(".pdf") },
-                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp),
+                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp),
                 )
             }
             Row(
@@ -190,20 +321,20 @@ private fun ActionBar(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (!saved) {
-                    IconButton(onClick = onAdd, enabled = !working) {
+                    IconButton(onClick = onAdd, enabled = !busy) {
                         Icon(Icons.Rounded.AddPhotoAlternate, "Add page")
                     }
-                    IconButton(onClick = { onMove(-1) }, enabled = !working && page > 0) {
+                    IconButton(onClick = { onMove(-1) }, enabled = !busy && page > 0) {
                         Icon(Icons.Rounded.ChevronLeft, "Move earlier")
                     }
-                    IconButton(onClick = { onMove(1) }, enabled = !working && page < state.pages.lastIndex) {
+                    IconButton(onClick = { onMove(1) }, enabled = !busy && page < state.pages.lastIndex) {
                         Icon(Icons.Rounded.ChevronRight, "Move later")
                     }
-                    IconButton(onClick = onDelete, enabled = !working) {
+                    IconButton(onClick = onDelete, enabled = !busy) {
                         Icon(Icons.Rounded.Delete, "Delete page")
                     }
                     Spacer(Modifier.weight(1f))
-                    Button(onClick = onSave, enabled = !working && !processing && state.fileName.isNotBlank()) {
+                    Button(onClick = onSave, enabled = !busy && state.fileName.isNotBlank()) {
                         if (working) CircularProgressIndicator(
                             Modifier.size(18.dp), strokeWidth = 2.dp, color = LocalContentColor.current,
                         )

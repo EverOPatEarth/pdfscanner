@@ -20,13 +20,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Share
-import androidx.compose.material.icons.rounded.Compress
 import androidx.compose.material.icons.rounded.ZoomIn
 import androidx.compose.material.icons.rounded.ZoomOut
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -41,12 +36,10 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -56,8 +49,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
-import com.example.pdfscan.features.PdfCompressor
-import kotlinx.coroutines.launch
 import com.example.pdfscan.domain.PdfEntry
 import com.example.pdfscan.ui.openPdf
 import com.example.pdfscan.ui.sharePdf
@@ -68,7 +59,7 @@ import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PdfViewerScreen(file: File, onBack: () -> Unit, onPdfChanged: suspend () -> Unit = {}) {
+fun PdfViewerScreen(file: File, onBack: () -> Unit) {
     val context = LocalContext.current
     val entry = remember(file) {
         PdfEntry(file, file.nameWithoutExtension, file.length(), file.lastModified())
@@ -83,10 +74,6 @@ fun PdfViewerScreen(file: File, onBack: () -> Unit, onPdfChanged: suspend () -> 
     val listState = rememberLazyListState()
     val currentPage by remember { derivedStateOf { listState.firstVisibleItemIndex + 1 } }
     var zoom by rememberSaveable { mutableFloatStateOf(1f) }
-    var compressionDialog by remember { mutableStateOf(false) }
-    var compressing by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    val snackbar = remember { SnackbarHostState() }
 
     Scaffold(
         containerColor = ReviewCanvas,
@@ -112,8 +99,6 @@ fun PdfViewerScreen(file: File, onBack: () -> Unit, onPdfChanged: suspend () -> 
                     IconButton(onClick = { zoom = (zoom + 0.5f).coerceAtMost(3f) }, enabled = zoom < 3f) {
                         Icon(Icons.Rounded.ZoomIn, "Zoom in")
                     }
-
-                    IconButton(onClick = { compressionDialog = true }, enabled = !compressing) { Icon(Icons.Rounded.Compress, "Compress PDF") }
                     IconButton(onClick = { context.sharePdf(entry) }) { Icon(Icons.Rounded.Share, "Share") }
                     IconButton(onClick = { context.openPdf(entry) }) {
                         Icon(Icons.AutoMirrored.Rounded.OpenInNew, "Open in another app")
@@ -122,7 +107,6 @@ fun PdfViewerScreen(file: File, onBack: () -> Unit, onPdfChanged: suspend () -> 
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
             )
         },
-        snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         BoxWithConstraints(Modifier.fillMaxSize().padding(padding).background(ReviewCanvas)) {
             val viewport = maxWidth
@@ -167,37 +151,4 @@ fun PdfViewerScreen(file: File, onBack: () -> Unit, onPdfChanged: suspend () -> 
             }
         }
     }
-
-    if (compressionDialog) {
-        AlertDialog(
-            onDismissRequest = { if (!compressing) compressionDialog = false },
-            title = { Text("Compress PDF") },
-            text = {
-                Column {
-                    Text("Optimize this PDF without reducing page resolution or rasterizing its text and vector content. The original file will remain unchanged.")
-                    Text("Some PDFs are already optimized, so the output may be the same size as the original.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (compressing) CircularProgressIndicator()
-                }
-            },
-            confirmButton = {
-                TextButton(enabled = !compressing, onClick = {
-                    compressing = true
-                    scope.launch {
-                        try {
-                            val output = File(file.parentFile, "${file.nameWithoutExtension}_compressed.pdf")
-                            val result = PdfCompressor.compress(context, file, output)
-                            val newEntry = PdfEntry(result, result.nameWithoutExtension, result.length(), result.lastModified())
-                            onPdfChanged()
-                            compressionDialog = false
-                            snackbar.showSnackbar(if (result.length() < file.length()) "Optimized: ${file.length()/1024} KB → ${result.length()/1024} KB" else "No safe size reduction found; original PDF quality and content were preserved.")
-                            context.sharePdf(newEntry)
-                        } catch (e: Exception) { snackbar.showSnackbar("Compression failed: ${e.message}") }
-                        finally { compressing = false }
-                    }
-                }) { Text("Compress & Share") }
-            },
-            dismissButton = { TextButton(enabled = !compressing, onClick = { compressionDialog = false }) { Text("Cancel") } },
-        )
-    }
-
 }

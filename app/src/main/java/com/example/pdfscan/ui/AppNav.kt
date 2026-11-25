@@ -29,7 +29,7 @@ fun AppNav(container: AppContainer) {
 
     // Activity-scoped so Home -> Preview share the scan session.
     val session: ScanSessionViewModel = viewModel(
-        factory = viewModelFactory { initializer { ScanSessionViewModel(container.pdfRepository) } }
+        factory = viewModelFactory { initializer { ScanSessionViewModel(container.pdfRepository, container.pageEditor, container.signatures) } }
     )
 
     NavHost(nav, startDestination = "home") {
@@ -72,7 +72,6 @@ fun AppNav(container: AppContainer) {
                 PdfViewerScreen(
                     file = File(File(context.filesDir, "pdfs"), name),
                     onBack = { nav.popBackStack() },
-                    onPdfChanged = { container.pdfRepository.refresh() },
                 )
             }
         }

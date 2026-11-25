@@ -5,6 +5,7 @@ import android.text.format.DateUtils
 import android.text.format.Formatter
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,11 +23,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Compress
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DocumentScanner
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -36,15 +39,19 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,6 +63,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.pdfscan.domain.Compression
 import com.example.pdfscan.domain.PdfEntry
 import com.example.pdfscan.scanner.rememberDocumentScanner
 import com.example.pdfscan.ui.sharePdf
@@ -66,10 +74,14 @@ import kotlinx.coroutines.launch
 fun HomeScreen(vm: HomeViewModel, onScanned: (List<Uri>) -> Unit, onOpen: (PdfEntry) -> Unit) {
     val state by vm.state.collectAsStateWithLifecycle()
     val dynamic by vm.dynamicColor.collectAsStateWithLifecycle()
+    val busy by vm.busy.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var menu by remember { mutableStateOf(false) }
+    var compressTarget by remember { mutableStateOf<PdfEntry?>(null) }
+
+    LaunchedEffect(Unit) { vm.messages.collect { snackbar.showSnackbar(it) } }
 
     val scan = rememberDocumentScanner(
         onPages = onScanned,
@@ -79,20 +91,23 @@ fun HomeScreen(vm: HomeViewModel, onScanned: (List<Uri>) -> Unit, onOpen: (PdfEn
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            TopAppBar(
-                title = { Text("Scanner", style = MaterialTheme.typography.titleLarge) },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
-                actions = {
-                    IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, "More") }
-                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        DropdownMenuItem(
-                            text = { Text("Dynamic color") },
-                            trailingIcon = { Switch(checked = dynamic, onCheckedChange = null) },
-                            onClick = { vm.setDynamicColor(!dynamic) },
-                        )
-                    }
-                },
-            )
+            Column {
+                TopAppBar(
+                    title = { Text("Scanner", style = MaterialTheme.typography.titleLarge) },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+                    actions = {
+                        IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, "More") }
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Dynamic color") },
+                                trailingIcon = { Switch(checked = dynamic, onCheckedChange = null) },
+                                onClick = { vm.setDynamicColor(!dynamic) },
+                            )
+                        }
+                    },
+                )
+                if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            }
         },
         snackbarHost = { SnackbarHost(snackbar) },
         floatingActionButton = {
@@ -118,18 +133,34 @@ fun HomeScreen(vm: HomeViewModel, onScanned: (List<Uri>) -> Unit, onOpen: (PdfEn
                         entry,
                         onOpen = { onOpen(entry) },
                         onShare = { context.sharePdf(entry) },
+                        onCompress = { compressTarget = entry },
                         onDelete = { vm.delete(entry) },
                     )
                 }
             }
         }
     }
+
+    compressTarget?.let { target ->
+        CompressDialog(
+            entry = target,
+            onConfirm = { level -> compressTarget = null; vm.compress(target, level) },
+            onDismiss = { compressTarget = null },
+        )
+    }
 }
 
 @Composable
-private fun PdfRow(entry: PdfEntry, onOpen: () -> Unit, onShare: () -> Unit, onDelete: () -> Unit) {
+private fun PdfRow(
+    entry: PdfEntry,
+    onOpen: () -> Unit,
+    onShare: () -> Unit,
+    onCompress: () -> Unit,
+    onDelete: () -> Unit,
+) {
     val context = LocalContext.current
     val colors = MaterialTheme.colorScheme
+    var menu by remember { mutableStateOf(false) }
     Card(
         onClick = onOpen,
         modifier = Modifier.fillMaxWidth(),
@@ -163,9 +194,59 @@ private fun PdfRow(entry: PdfEntry, onOpen: () -> Unit, onShare: () -> Unit, onD
                     .padding(horizontal = 6.dp, vertical = 2.dp),
             )
             IconButton(onClick = onShare) { Icon(Icons.Rounded.Share, "Share") }
-            IconButton(onClick = onDelete) { Icon(Icons.Rounded.Delete, "Delete") }
+            Box {
+                IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, "More") }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Compress") },
+                        leadingIcon = { Icon(Icons.Rounded.Compress, null) },
+                        onClick = { menu = false; onCompress() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Delete") },
+                        leadingIcon = { Icon(Icons.Rounded.Delete, null) },
+                        onClick = { menu = false; onDelete() },
+                    )
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun CompressDialog(entry: PdfEntry, onConfirm: (Compression) -> Unit, onDismiss: () -> Unit) {
+    var level by remember { mutableStateOf(Compression.BALANCED) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Compress PDF") },
+        text = {
+            Column {
+                Text(
+                    "Creates a smaller copy of \"${entry.name}\". Pages are re-saved as images, " +
+                        "so any selectable text is removed from the copy. The original is kept.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(12.dp))
+                Compression.entries.forEach { c ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { level = c }.padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = level == c, onClick = { level = c })
+                        Column {
+                            Text(c.label, style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                c.hint, style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { onConfirm(level) }) { Text("Compress") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable

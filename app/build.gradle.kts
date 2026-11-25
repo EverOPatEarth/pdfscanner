@@ -12,8 +12,8 @@ android {
         applicationId = "com.example.pdfscan"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.4.0"
+        versionCode = 1
+        versionName = "1.0.0"
     }
 
     buildTypes {
@@ -47,8 +47,7 @@ dependencies {
 
     implementation(libs.coil.compose)
     implementation(libs.mlkit.document.scanner)
-    implementation(libs.kotlinx.coroutines.play.services)
-    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+    implementation(libs.mlkit.text.recognition)   // on-device OCR (Latin script), bundled model
 
     testImplementation(libs.junit)
 }

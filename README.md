@@ -1,10 +1,31 @@
-# PDF Scanner (Android, Kotlin, Jetpack Compose) – v1.3.0
+# PDF Scanner (Android, Kotlin, Jetpack Compose) – v1.0.0 MVP
 
 Scan or import pages with the Google ML Kit Document Scanner, reorder/delete/rename,
 save as a PDF in app-private storage, then open or share it via the Android share sheet.
 
 Stack: Kotlin 2.0, Jetpack Compose, Material 3 (light/dark + optional Dynamic Color),
 MVVM with StateFlow, manual DI (`AppContainer`), no runtime permissions.
+
+---------------------------------------------------------------------
+## Features (v1.1)
+---------------------------------------------------------------------
+- Scan or import pages (ML Kit Document Scanner), reorder, delete, rename.
+- Remove stains: chip "Remove stains" on the Review screen. Removes shadows, stains and yellow
+  paper tint. The page preview updates live. Applied to every page when you press Save PDF.
+- OCR (searchable PDF): chip "OCR (searchable)". Adds an invisible text layer, so you can search
+  and select text in PDF readers. On-device, works offline. Latin script (English, French, Spanish...).
+  Takes a few seconds per page.
+- Compression: chip "Size: ..." (High quality / Balanced / Smallest) when saving a new PDF, AND
+  "Compress" in the menu of any PDF on the Home screen (creates a smaller copy and shows the
+  before/after size; the original is kept). Compressing an existing PDF re-saves pages as images,
+  so selectable text is removed from the copy.
+- E-signature: chip "Sign". Draw your signature once (stored privately on the device), then drag
+  and resize it on the page and press Apply. "Remove signature" undoes it for that page.
+  This is an image signature, not a certificate-based digital signature.
+- Built-in PDF viewer (scroll, zoom, share).
+
+The PDF engine is now `data/JpegPdfEngine.kt` (hand-written PDF writer with JPEG pages, OCR text
+layer, no third-party PDF library). Stain removal is `data/StainCleaner.kt`.
 
 ---------------------------------------------------------------------
 ## 0. Build the APK on GitHub (no Android Studio needed)
@@ -34,7 +55,7 @@ This repo includes `.github/workflows/build.yml`. GitHub builds the app for you.
 Make a downloadable release:
 
     git tag -a v1.0.0 -m "MVP"
-    git push origin v1.3.0
+    git push origin v1.0.0
 
 The workflow then attaches `app-debug.apk` to a GitHub Release (Releases page).
 
@@ -44,31 +65,7 @@ Paste it to Claude and it can fix the code.
 Note: this is a debug-signed APK, fine for personal use and testing. A Play Store
 release needs your own signing key (keep it in GitHub Secrets, never in the repo).
 
-
 ---------------------------------------------------------------------
-## 3. PDF compression (v1.3.0)
----------------------------------------------------------------------
-
-- **Lossless PDF rewrite:** Open a saved PDF in the built-in viewer and tap the
-  compression icon. The app uses PDFBox-Android to rewrite the PDF without
-  rasterizing pages, downscaling images, or converting pages to JPEG.
-- Text, vector content, page dimensions, and embedded image pixel dimensions are
-  retained by the rewrite. The original file is never overwritten.
-- The optimized file is saved separately with `_compressed` appended to its name
-  and offered through Android's share sheet.
-- A smaller output is not guaranteed. If the rewrite does not make the PDF smaller,
-  the app copies the original bytes unchanged instead of producing a larger file.
-- This prioritizes content preservation over aggressive size reduction. Encrypted
-  PDFs may require a password and may not be supported. Saving a digitally signed
-  PDF can invalidate its existing digital signature; test forms and unusual PDF
-  features before relying on the output.
-
-The scan-review workflow remains: scan/import pages, reorder or delete pages,
-rename the output, save as PDF, preview, and share. OCR, stain/background cleaning,
-and signature tools are not included.
-
----------------------------------------------------------------------
-
 ## 1. Requirements
 ---------------------------------------------------------------------
 - Android Studio Ladybug (2024.2.1) or newer (Koala works; newer is better)
@@ -120,11 +117,14 @@ To use Inter:
 ---------------------------------------------------------------------
     app/src/main/java/com/example/pdfscan/
       ScanApp.kt, AppContainer.kt, MainActivity.kt
-      domain/    Models.kt, PdfEngine.kt, PdfRepository.kt      (contracts, no UI)
-      data/      AndroidPdfEngine.kt, LocalPdfRepository.kt, SettingsRepository.kt
+      domain/    Models.kt, PdfEngine.kt, PdfRepository.kt, PageEditor.kt   (contracts, no UI)
+      data/      JpegPdfEngine.kt, StainCleaner.kt, TextOcr.kt, PdfRasterizer.kt,
+                 AndroidPageEditor.kt, SignatureStore.kt, BitmapDecoder.kt,
+                 LocalPdfRepository.kt, SettingsRepository.kt
       scanner/   DocumentScanner.kt                              (ML Kit wrapper -> List<Uri>)
       ui/        AppNav.kt, IntentUtils.kt
         viewer/  PdfViewerScreen.kt, PdfDocumentHandle.kt           (built-in PDF viewer)
+        sign/    SignDialog.kt                                      (draw + place signature)
         theme/   Color.kt, Type.kt, Theme.kt
         home/    HomeScreen.kt, HomeViewModel.kt
         preview/ PreviewScreen.kt, ScanSessionViewModel.kt
@@ -159,8 +159,8 @@ Dependency rule: ui -> domain <- data. `scanner` is only used by `ui`.
     gh repo create pdfscan --private --source=. --remote=origin --push
     # or: git remote add origin git@github.com:<you>/pdfscan.git && git push -u origin main
 
-    git tag -a v1.3.0 -m "compression-focused release"
-    git push origin v1.3.0
+    git tag -a v1.0.0 -m "MVP: scan, preview, export, share"
+    git push origin v1.0.0
 
 Branches: `main` (always buildable), `feature/<name>`, `fix/<name>`, `chore/<name>`; squash-merge PRs.
 Commits (Conventional Commits): `feat(scope): ...`, `fix(scope): ...`, `refactor`, `perf`, `test`,
@@ -169,10 +169,10 @@ Never commit keystores or `keystore.properties` (already in `.gitignore`).
 
 Roadmap (tags / milestones):
 - v0.1.0  walking skeleton: scan -> PDF -> share
-- v1.0.0  original scanner MVP
-- v1.3.0  Compression-focused release; removes OCR, cleaning, and signature tools
-- v1.3.0  Save-to-Files workflow and page-reordering improvements
-- v2.0.0  Room index + folders/tags, cloud backup
+- v1.0.0  MVP (this project)
+- v1.1.0  Save to Files (ACTION_CREATE_DOCUMENT), drag-reorder, undo delete,
+          photo-picker/CameraX fallback, PDF size options
+- v2.0.0  Room index + folders/tags, OCR (searchable PDF), compression engine, cloud backup
 
 ---------------------------------------------------------------------
 ## 7. Extension points (where future features plug in)
@@ -180,32 +180,21 @@ Roadmap (tags / milestones):
 | Feature                      | Seam                                   | Change                                           |
 |------------------------------|----------------------------------------|--------------------------------------------------|
 | PDF viewer engine (PDFium etc)| `ui/viewer/PdfDocumentHandle`          | Swap the renderer; viewer UI unchanged           |
-| PDF creation / compression | `features/PdfCompressor`, `domain/PdfEngine` | Extend processing or replace raster compressor |
+| Better PDF / compression/OCR | `domain/PdfEngine`                     | New implementation; swap in `AppContainer`       |
 | CameraX / photo picker       | `ScanSessionViewModel.addPages(Uris)`  | New launcher that calls `addPages`               |
 | Folders, tags, search        | `domain/PdfRepository`, `PdfEntry`     | Back with Room (files stay on disk)              |
 | Cloud backup                 | `PdfRepository` + WorkManager          | Add a `BackupTarget` interface                   |
 | New export steps             | `ExportState` sealed interface         | Add `Processing(step, progress)`; fix `when`s    |
+| Filters / deskew / OCR prep  | (v1.1) `PageProcessor` before engine   | Fold processors over pages in `export()`         |
 | Hilt                         | Constructor-injected ViewModels        | Replace `AppContainer` with Hilt modules         |
 
 ---------------------------------------------------------------------
 ## 8. Notes
 ---------------------------------------------------------------------
 - minSdk 26, targetSdk/compileSdk 35. No CAMERA or storage permissions are needed.
+- OCR model (about 4 MB) is bundled in the APK; no download needed. `largeHeap` is enabled for
+  stain removal on large pages.
 - PDFs are stored in `filesDir/pdfs` (private; removed on uninstall) and shared via FileProvider
   (`${applicationId}.fileprovider`) with temporary read grants.
-- New PDF exports use `android.graphics.pdf.PdfDocument`; pages are downsampled to 2000 px on the long edge (`PdfOptions.maxEdgePx`). The compression tool rasterizes existing PDF pages and JPEG-recompresses them; it is intended for scanned PDFs and does not preserve selectable text/vector content.
+- Pages are stored as JPEG inside the PDF. Size presets live in `domain/PdfEngine.kt` (`Compression`).
 - Dependency versions in `gradle/libs.versions.toml` are pinned; bump them when you start.
-
-
-## v1.4.0 — JPEG-preserving PDF generation
-
-- PDF generation now embeds the JPEG pages returned by ML Kit Document Scanner directly with PDFBox.
-- Removed the fixed 2,000 px decode/downscale step from the PDF generation path.
-- The original JPEG pixel dimensions and compressed JPEG image data are retained when embedded.
-- Pages are fitted onto A4-sized PDF pages; the PDF page size does not determine or reduce the embedded image pixel dimensions.
-- This change avoids an additional Bitmap decode, resize and re-encode cycle. It does not enhance a blurry source scan or guarantee a smaller PDF than CamScanner.
-- The existing PDFBox rewrite compressor remains a structural rewrite and is not yet content-aware image recompression.
-
-### Build and test
-
-Run the existing GitHub Actions workflow (`Build APK`) on the `main` branch. Test the resulting APK with the same source documents used for the previous version. Compare source JPEG dimensions, output PDF size, rendered text clarity, and page count.
